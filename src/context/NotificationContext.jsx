@@ -21,7 +21,7 @@ export function NotificationProvider({ children }) {
       return;
     }
 
-    const wsUrl = "http://localhost:8081/ws";
+    const wsUrl = "https://taskmanagment-backend-mrt0.onrender.com/ws";
     const sock = new SockJS(wsUrl);
     const client = new Client({
       webSocketFactory: () => sock,
