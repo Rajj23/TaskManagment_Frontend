@@ -27,13 +27,13 @@ function CreateTask() {
 
     // Convert priority string to backend number
     const priorityNum =
-      form.priority === "low"
+      form.priority === "high"
         ? 1
         : form.priority === "medium"
         ? 2
-        : form.priority === "high"
+        : form.priority === "low"
         ? 3
-        : 1;
+        : 3;
 
     // Use deadline as is (datetime-local value: "2025-07-18T17:30")
     // If user picks a value, always add ":00" seconds if not present
