@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect,useRef, useState } from "react";
 import api from "../services/api";
 import { useNotifications } from "../context/NotificationContext";
+import Mystack from "../components/Mystack"
 
-// Helper: map number to priority string (backend: 1=high, 2=medium, 3=low)
 function mapPriority(priority) {
   if (typeof priority === "number") {
     if (priority === 1) return "high";
@@ -12,7 +12,6 @@ function mapPriority(priority) {
   return priority || "low";
 }
 
-// Helper: map priority string to number (backend: 1=high, 2=medium, 3=low)
 function priorityToNumber(priority) {
   if (priority === "high") return 1;
   if (priority === "medium") return 2;
@@ -21,11 +20,16 @@ function priorityToNumber(priority) {
 }
 
 function Tasks() {
+
+  const undoStack = useRef(new Mystack());
+  const redoStack = useRef(new Mystack());
+
   const { addNotification } = useNotifications();
   const [tasks, setTasks] = useState([]);
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [undoRedoLoading, setUndoRedoLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -45,14 +49,13 @@ function Tasks() {
     deadline: ""
   });
 
-  // Convert backend ISO string to datetime-local (for input value)
+  
   function isoToLocalDatetime(iso) {
     if (!iso) return "";
-    // removes seconds for input value, eg: 2025-07-16T18:45
     return iso.slice(0, 16);
   }
 
-  // For filter, append time if using datetime
+  
   function dateToFilterDatetime(date, type) {
     if (!date) return "";
     return type === "start"
@@ -60,10 +63,12 @@ function Tasks() {
       : `${date}T23:59:59`;
   }
 
-  // ---- Handlers ----
 
-  // Mark complete/in-progress handler
   const handleMarkComplete = async (task) => {
+    // Save current state for undo
+    undoStack.current.push([...tasks]);
+    redoStack.current.clear();
+
     try {
       const newStatus =
         task.status === "completed" ? "in-progress" : "completed";
@@ -95,8 +100,40 @@ function Tasks() {
       description: task.description || "",
       priority: mapPriority(task.priority),
       status: task.status || "",
-      deadline: isoToLocalDatetime(task.deadline) // supports datetime-local
+      deadline: isoToLocalDatetime(task.deadline) 
     });
+  };
+
+  const handleUndo = async () => {
+    if (!undoStack.current.isEmpty()) {
+      setUndoRedoLoading(true);
+      try {
+        const previousState = undoStack.current.pop();
+        redoStack.current.push([...tasks]);
+        setTasks(previousState);
+        addNotification("Action undone!", "success");
+      } catch (error) {
+        addNotification("Failed to undo action.", "error");
+      } finally {
+        setUndoRedoLoading(false);
+      }
+    }
+  };
+
+  const handleRedo = async () => {
+    if (!redoStack.current.isEmpty()) {
+      setUndoRedoLoading(true);
+      try {
+        const nextState = redoStack.current.pop();
+        undoStack.current.push([...tasks]);
+        setTasks(nextState);
+        addNotification("Action redone!", "success");
+      } catch (error) {
+        addNotification("Failed to redo action.", "error");
+      } finally {
+        setUndoRedoLoading(false);
+      }
+    }
   };
 
   const handleFilter = async () => {
@@ -128,6 +165,10 @@ function Tasks() {
 
   const handleDeleteTask = async (taskId) => {
     if (!window.confirm("Are you sure you want to delete this task?")) return;
+
+    undoStack.current.push([...tasks]);
+    redoStack.current.clear();
+
     const taskToDelete = tasks.find(t => t.id === taskId);
     const taskTitle = taskToDelete?.title || "Task";
     try {
@@ -142,8 +183,9 @@ function Tasks() {
   };
 
   const handleSaveEdit = async () => {
+    undoStack.current.push([...tasks])
+    redoStack.current.clear();
     try {
-      // Format deadline for backend (always add :00 seconds if missing)
       let formattedDeadline = editForm.deadline;
       if (formattedDeadline && formattedDeadline.length === 16)
         formattedDeadline = formattedDeadline + ":00";
@@ -223,16 +265,12 @@ function Tasks() {
       endpoint = `/task/gettasks?page=${page}&size=5`;
     }
 
-    console.log("📋 Fetching from endpoint:", endpoint);
+   
     const res = await api.get(endpoint);
-    console.log("📋 API Response:", res.data);
-    console.log("📋 Total Pages:", res.data.totalPages);
-    console.log("📋 Content length:", res.data.content ? res.data.content.length : "No content property");
     
     setTasks(res.data.content || res.data);
     setTotalPages(res.data.totalPages || 1);
     } catch (err) {
-      console.log("📋 Fetch error:", err);
       setError(
         err.response?.data?.message ||
         err.message ||
@@ -246,10 +284,8 @@ function Tasks() {
 
   useEffect(() => {
     fetchTasks();
-    // eslint-disable-next-line
   }, [page, sortBy, sortOrder]);
 
-  // ---- JSX ----
 
   return (
     <div>
@@ -327,17 +363,40 @@ function Tasks() {
       </form>
 
       {/* Sort Bar */}
-      <div className="flex gap-2 mb-4">
-        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="p-2 border rounded">
-          <option value="deadline">Sort by Deadline</option>
-          <option value="priority">Sort by Priority</option>
-          <option value="title">Sort by Title</option>
-        </select>
-        <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} className="p-2 border rounded">
-          <option value="asc">Asc</option>
-          <option value="desc">Desc</option>
-        </select>
+      <div className="flex gap-2 mb-4 items-center justify-between">
+        <div className="flex gap-2">
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="p-2 border rounded">
+            <option value="deadline">Sort by Deadline</option>
+            <option value="priority">Sort by Priority</option>
+            <option value="title">Sort by Title</option>
+          </select>
+          <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} className="p-2 border rounded">
+            <option value="asc">Asc</option>
+            <option value="desc">Desc</option>
+          </select>
+        </div>
+        
+        {/* Undo/Redo buttons */}
+        <div className="flex gap-2">
+          <button 
+            onClick={handleUndo} 
+            disabled={undoStack.current.isEmpty() || undoRedoLoading}
+            className="bg-gray-500 text-white px-3 py-2 rounded hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            title="Undo last action"
+          >
+            {undoRedoLoading ? "..." : "Undo"}
+          </button>
+          <button 
+            onClick={handleRedo} 
+            disabled={redoStack.current.isEmpty() || undoRedoLoading}
+            className="bg-gray-500 text-white px-3 py-2 rounded hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            title="Redo last action"
+          >
+            {undoRedoLoading ? "..." : "Redo"}
+          </button>
+        </div>
       </div>
+
 
       {loading && <div>Loading tasks...</div>}
       {error && <div className="text-red-500">{error}</div>}
