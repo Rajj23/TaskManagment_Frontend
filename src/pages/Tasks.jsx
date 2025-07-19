@@ -110,10 +110,16 @@ function Tasks() {
       try {
         const previousState = undoStack.current.pop();
         redoStack.current.push([...tasks]);
+        
+        // Update database with previous state
+        await syncTasksWithDatabase(previousState);
+        
         setTasks(previousState);
-        addNotification("Action undone!", "success");
+        addNotification("Action undone successfully!", "success");
       } catch (error) {
-        addNotification("Failed to undo action.", "error");
+        // If database sync fails, restore the stack state
+        undoStack.current.push(redoStack.current.pop());
+        addNotification("Failed to undo action. Please try again.", "error");
       } finally {
         setUndoRedoLoading(false);
       }
@@ -126,13 +132,90 @@ function Tasks() {
       try {
         const nextState = redoStack.current.pop();
         undoStack.current.push([...tasks]);
+        
+        // Update database with next state
+        await syncTasksWithDatabase(nextState);
+        
         setTasks(nextState);
-        addNotification("Action redone!", "success");
+        addNotification("Action redone successfully!", "success");
       } catch (error) {
-        addNotification("Failed to redo action.", "error");
+        // If database sync fails, restore the stack state
+        redoStack.current.push(undoStack.current.pop());
+        addNotification("Failed to redo action. Please try again.", "error");
       } finally {
         setUndoRedoLoading(false);
       }
+    }
+  };
+
+  // Helper function to sync task state with database
+  const syncTasksWithDatabase = async (taskState) => {
+    const currentTasks = tasks;
+    const targetTasks = taskState;
+
+    // Find tasks that were deleted (exist in current but not in target)
+    const deletedTasks = currentTasks.filter(current => 
+      !targetTasks.find(target => target.id === current.id)
+    );
+
+    // Find tasks that were added (exist in target but not in current)
+    const addedTasks = targetTasks.filter(target => 
+      !currentTasks.find(current => current.id === target.id)
+    );
+
+    // Find tasks that were modified (exist in both but with different properties)
+    const modifiedTasks = targetTasks.filter(target => {
+      const current = currentTasks.find(c => c.id === target.id);
+      return current && (
+        current.title !== target.title ||
+        current.description !== target.description ||
+        current.status !== target.status ||
+        current.priority !== target.priority ||
+        current.deadline !== target.deadline
+      );
+    });
+
+    // Apply changes to database
+    const promises = [];
+
+    // Handle deleted tasks (restore them)
+    deletedTasks.forEach(task => {
+      promises.push(
+        api.post('/task/create', {
+          title: task.title,
+          description: task.description,
+          priority: typeof task.priority === "number" ? task.priority : priorityToNumber(task.priority),
+          status: task.status,
+          deadline: task.deadline
+        })
+      );
+    });
+
+    // Handle added tasks (delete them)
+    addedTasks.forEach(task => {
+      promises.push(api.delete(`/task/delete/${task.id}`));
+    });
+
+    // Handle modified tasks (update them)
+    modifiedTasks.forEach(task => {
+      promises.push(
+        api.put(`/task/update/${task.id}`, {
+          title: task.title,
+          description: task.description,
+          priority: typeof task.priority === "number" ? task.priority : priorityToNumber(task.priority),
+          status: task.status,
+          deadline: task.deadline
+        })
+      );
+    });
+
+    // Wait for all database operations to complete
+    try {
+      await Promise.all(promises);
+      console.log("✅ Database sync completed successfully");
+    } catch (error) {
+      console.error("❌ Database sync failed:", error);
+      throw error;
     }
   };
 
